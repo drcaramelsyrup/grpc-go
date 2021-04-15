@@ -24,22 +24,25 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"io"
 	"log"
 	"math/rand"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/examples/data"
 	pb "google.golang.org/grpc/examples/route_guide/routeguide"
+	"google.golang.org/grpc/grpclog"
 )
 
 var (
-	tls                = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
-	caFile             = flag.String("ca_file", "", "The file containing the CA root cert file")
-	serverAddr         = flag.String("server_addr", "localhost:10000", "The server address in the format of host:port")
+	useTls             = flag.Bool("tls", true, "Connection uses TLS if true, else plain TCP")
+	caFile             = flag.String("ca_file", "/etc/ssl/grpc/ca.crt", "The file containing the CA root cert file")
+	serverAddr         = flag.String("server_addr", "localhost:10443", "The server address in the format of host:port")
 	serverHostOverride = flag.String("server_host_override", "x.test.youtube.com", "The server name used to verify the hostname returned by the TLS handshake")
 )
 
@@ -115,30 +118,34 @@ func runRouteChat(client pb.RouteGuideClient) {
 		{Location: &pb.Point{Latitude: 0, Longitude: 2}, Message: "Fifth message"},
 		{Location: &pb.Point{Latitude: 0, Longitude: 3}, Message: "Sixth message"},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	stream, err := client.RouteChat(ctx)
 	if err != nil {
 		log.Fatalf("%v.RouteChat(_) = _, %v", client, err)
 	}
 	waitc := make(chan struct{})
-	go func() {
-		for {
-			in, err := stream.Recv()
-			if err == io.EOF {
-				// read done.
-				close(waitc)
-				return
+	for {
+		time.Sleep(3 * time.Second)
+		go func() {
+			for {
+				in, err := stream.Recv()
+				if err == io.EOF {
+					// read done.
+					close(waitc)
+					return
+				}
+				if err != nil {
+					log.Fatalf("Failed to receive a note : %v", err)
+				}
+				log.Printf("Got message %s at point(%d, %d)", in.Message, in.Location.Latitude, in.Location.Longitude)
 			}
-			if err != nil {
-				log.Fatalf("Failed to receive a note : %v", err)
+		}()
+		for _, note := range notes {
+			log.Printf("Send message %s", note)
+			if err := stream.Send(note); err != nil {
+				log.Fatalf("Failed to send a note: %v", err)
 			}
-			log.Printf("Got message %s at point(%d, %d)", in.Message, in.Location.Latitude, in.Location.Longitude)
-		}
-	}()
-	for _, note := range notes {
-		if err := stream.Send(note); err != nil {
-			log.Fatalf("Failed to send a note: %v", err)
 		}
 	}
 	stream.CloseSend()
@@ -154,20 +161,22 @@ func randomPoint(r *rand.Rand) *pb.Point {
 func main() {
 	flag.Parse()
 	var opts []grpc.DialOption
-	if *tls {
+	if *useTls {
 		if *caFile == "" {
 			*caFile = data.Path("x509/ca_cert.pem")
 		}
-		creds, err := credentials.NewClientTLSFromFile(*caFile, *serverHostOverride)
-		if err != nil {
-			log.Fatalf("Failed to create TLS credentials %v", err)
+		config := &tls.Config{
+			InsecureSkipVerify: true,
 		}
+		creds := credentials.NewTLS(config)
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	} else {
 		opts = append(opts, grpc.WithInsecure())
 	}
 
 	opts = append(opts, grpc.WithBlock())
+
+	grpclog.SetLoggerV2(grpclog.NewLoggerV2WithVerbosity(os.Stderr, os.Stderr, os.Stderr, 2))
 	conn, err := grpc.Dial(*serverAddr, opts...)
 	if err != nil {
 		log.Fatalf("fail to dial: %v", err)
@@ -175,20 +184,7 @@ func main() {
 	defer conn.Close()
 	client := pb.NewRouteGuideClient(conn)
 
-	// Looking for a valid feature
-	printFeature(client, &pb.Point{Latitude: 409146138, Longitude: -746188906})
-
-	// Feature missing.
-	printFeature(client, &pb.Point{Latitude: 0, Longitude: 0})
-
-	// Looking for features between 40, -75 and 42, -73.
-	printFeatures(client, &pb.Rectangle{
-		Lo: &pb.Point{Latitude: 400000000, Longitude: -750000000},
-		Hi: &pb.Point{Latitude: 420000000, Longitude: -730000000},
-	})
-
-	// RecordRoute
-	runRecordRoute(client)
+	log.Printf("Started client")
 
 	// RouteChat
 	runRouteChat(client)

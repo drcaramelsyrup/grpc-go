@@ -46,11 +46,11 @@ import (
 )
 
 var (
-	tls        = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
-	certFile   = flag.String("cert_file", "", "The TLS cert file")
-	keyFile    = flag.String("key_file", "", "The TLS key file")
+	tls        = flag.Bool("tls", true, "Connection uses TLS if true, else plain TCP")
+	certFile   = flag.String("cert_file", "/etc/ssl/grpc/server.crt", "The TLS cert file")
+	keyFile    = flag.String("key_file", "/etc/ssl/grpc/server.key", "The TLS key file")
 	jsonDBFile = flag.String("json_db_file", "", "A json file containing a list of features")
-	port       = flag.Int("port", 10000, "The server port")
+	port       = flag.Int("port", 10443, "The server port")
 )
 
 type routeGuideServer struct {
@@ -132,6 +132,7 @@ func (s *routeGuideServer) RouteChat(stream pb.RouteGuide_RouteChatServer) error
 			return err
 		}
 		key := serialize(in.Location)
+		log.Printf(key)
 
 		s.mu.Lock()
 		s.routeNotes[key] = append(s.routeNotes[key], in)
@@ -142,11 +143,11 @@ func (s *routeGuideServer) RouteChat(stream pb.RouteGuide_RouteChatServer) error
 		copy(rn, s.routeNotes[key])
 		s.mu.Unlock()
 
-		for _, note := range rn {
-			if err := stream.Send(note); err != nil {
-				return err
-			}
-		}
+		//for _, note := range rn {
+		//	if err := stream.Send(note); err != nil {
+		//		return err
+		//	}
+		//}
 	}
 }
 
@@ -219,17 +220,17 @@ func newServer() *routeGuideServer {
 
 func main() {
 	flag.Parse()
-	lis, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", *port))
+	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	var opts []grpc.ServerOption
 	if *tls {
 		if *certFile == "" {
-			*certFile = data.Path("x509/server_cert.pem")
+			*certFile = data.Path("/etc/ssl/grpc/server.crt")
 		}
 		if *keyFile == "" {
-			*keyFile = data.Path("x509/server_key.pem")
+			*keyFile = data.Path("/etc/ssl/grpc/server.key")
 		}
 		creds, err := credentials.NewServerTLSFromFile(*certFile, *keyFile)
 		if err != nil {
